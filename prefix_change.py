@@ -1,8 +1,8 @@
 import torch
 import copy
-model_fr = torch.load("SST_FP.pt")
+model_fr = torch.load("SST-2_FP.pt")
 model_fr = model_fr['model']
-model_to = torch.load("pytorch_model.bin", map_location='cpu')
+model_to = torch.load("models/SST-2/pytorch_model.bin", map_location='cpu')
 
 model_fr_dict = copy.deepcopy(model_fr)
 model_to_dict = copy.deepcopy(model_to)
@@ -14,6 +14,9 @@ for name, param in model_fr_dict.items():
     to_list.append("bert")
     from_list = name.split('.')
 
+    if "lm_head" in from_list[1]:
+        continue
+
     if from_list[0] == "encoder":
         if 'emb' in from_list[2]:
             to_list.append("embeddings")
@@ -21,6 +24,8 @@ for name, param in model_fr_dict.items():
                 to_list.append("word_embeddings")
             elif "positions" in from_list[2]:
                 to_list.append("position_embeddings")
+            elif "segment_embeddings" in from_list[2]:
+                to_list.append("token_type_embeddings")
             elif "emb_layer_norm" in from_list[2]:
                 to_list.append("LayerNorm")
             

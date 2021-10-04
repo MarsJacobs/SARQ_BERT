@@ -118,16 +118,17 @@ class TwnQuantizer(torch.autograd.Function):
         :param input: tensor to be ternarized
         :return: quantized tensor
         """
+        
         ctx.save_for_backward(input, clip_val)
         input = torch.where(input < clip_val[1], input, clip_val[1])
         input = torch.where(input > clip_val[0], input, clip_val[0])
         if layerwise:
-            m = input.norm(p=1).div(input.nelement())
+            m = input.norm(p=1).div(input.nelement()) # input.abs().mean()
             thres = 0.7 * m
             pos = (input > thres).float()
             neg = (input < -thres).float()
             mask = (input.abs() > thres).float()
-            alpha = (mask * input).abs().sum() / mask.sum()
+            alpha = (mask * input).abs().sum() / mask.sum() # scale
             result = alpha * pos - alpha * neg
         else: # row-wise only for embed / weight
             n = input[0].nelement()
@@ -188,7 +189,7 @@ class QuantizeEmbedding(nn.Embedding):
     def __init__(self,  *kargs,padding_idx=None, config = None):
         super(QuantizeEmbedding, self).__init__(*kargs, padding_idx = padding_idx)
         self.weight_bits = config.weight_bits
-        self.layerwise = False
+        self.layerwise = True # MSKIM Embedding Weight Quantize Weight Row-Wise
         if self.weight_bits == 2:
             self.weight_quantizer = TwnQuantizer
         else:

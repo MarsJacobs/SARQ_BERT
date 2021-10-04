@@ -30,8 +30,8 @@ from .utils_quant import QuantizeLinear, QuantizeEmbedding, SymQuantizer
 logger = logging.getLogger(__name__)
 
 CONFIG_NAME = "config.json"
-#WEIGHTS_NAME = "pytorch_model.bin"
-WEIGHTS_NAME = "SST_renamed.bin"
+WEIGHTS_NAME = "pytorch_model.bin"
+#WEIGHTS_NAME = "SST-2_renamed.bin"
 
 def gelu(x):
     """Implementation of the gelu activation function.
@@ -46,12 +46,13 @@ class BertEmbeddings(nn.Module):
         super(BertEmbeddings, self).__init__()
         self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx = 0) # 0 -> 1 MSKIM
         self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size) # MSKIM added
-        #self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
+        self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
         
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         
     def forward(self, input_ids, token_type_ids):
+        
         seq_length = input_ids.size(1)
         position_ids = torch.arange(
             seq_length, dtype=torch.long, device=input_ids.device)
@@ -59,9 +60,9 @@ class BertEmbeddings(nn.Module):
 
         words_embeddings = self.word_embeddings(input_ids)
         position_embeddings = self.position_embeddings(position_ids)
-        #token_type_embeddings = self.token_type_embeddings(token_type_ids)
+        token_type_embeddings = self.token_type_embeddings(token_type_ids)
 
-        embeddings = words_embeddings + position_embeddings #+ token_type_embeddings
+        embeddings = words_embeddings + position_embeddings + token_type_embeddings
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
@@ -266,7 +267,12 @@ class BertPreTrainedModel(nn.Module):
             logger.info("Loading model {}".format(weights_path))
             state_dict = torch.load(weights_path, map_location='cpu')
 
-        # Load from a PyTorch state_dict
+        
+        #state_dict.pop("bert.weight")
+        #state_dict.pop("bert.bias")
+        #model.load_state_dict(state_dict, strict=False)
+
+        #Load from a PyTorch state_dict
         old_keys = []
         new_keys = []
         for key in state_dict.keys():

@@ -33,8 +33,8 @@ from .utils_quant import QuantizeLinear, QuantizeEmbedding, SymQuantizer
 logger = logging.getLogger(__name__)
 
 CONFIG_NAME = "config.json"
-WEIGHTS_NAME = "SST_renamed.bin"
-#WEIGHTS_NAME = "pytorch_model.bin"
+#WEIGHTS_NAME = "SST-2_renamed.bin"
+WEIGHTS_NAME = "pytorch_model.bin"
 
 def gelu(x):
     """Implementation of the gelu activation function.
@@ -104,6 +104,7 @@ class BertSelfAttention(nn.Module):
         return x.permute(0, 2, 1, 3)
 
     def forward(self, hidden_states, attention_mask, output_att=False):
+        
         mixed_query_layer = self.query(hidden_states)
         mixed_key_layer = self.key(hidden_states)
         mixed_value_layer = self.value(hidden_states)
@@ -289,8 +290,11 @@ class BertPreTrainedModel(nn.Module):
                 pretrained_model_name_or_path, WEIGHTS_NAME)
             logger.info("Loading model {}".format(weights_path))
             state_dict = torch.load(weights_path, map_location='cpu')
-
-        # Load from a PyTorch state_dict
+        
+        #state_dict.pop("bert.weight")
+        #state_dict.pop("bert.bias")
+        #model.load_state_dict(state_dict, strict=False)
+        #Load from a PyTorch state_dict
         old_keys = []
         new_keys = []
         for key in state_dict.keys():
@@ -328,7 +332,7 @@ class BertPreTrainedModel(nn.Module):
             start_prefix = 'bert.'
 
         logger.info('loading model...')
-        import pdb; pdb.set_trace()
+        
         load(model, prefix=start_prefix)
         logger.info('done!')
         if len(missing_keys) > 0:

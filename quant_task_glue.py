@@ -17,7 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.nn import CrossEntropyLoss, MSELoss
 
 from transformer import BertForSequenceClassification,WEIGHTS_NAME, CONFIG_NAME
-from transformer.modeling_quant import BertForSequenceClassification as QuantBertForSequenceClassification
+from transformer.modeling_quant import BertForSequenceClassification as QuaertForSequenceClassification
 from transformer import BertTokenizer
 from transformer import BertAdam
 from transformer import BertConfig
@@ -77,6 +77,7 @@ def do_eval(model, task_name, eval_dataloader,
         preds = np.argmax(preds, axis=1)
     elif output_mode == "regression":
         preds = np.squeeze(preds)
+
     result = compute_metrics(task_name, preds, eval_labels.numpy())
     result['eval_loss'] = eval_loss
     return result
@@ -161,7 +162,7 @@ def main():
                         help="Initial clip value.")
 
     args = parser.parse_args()
-    assert args.pred_distill or args.intermediate_distill, "'pred_distill' and 'intermediate_distill', at least one must be True"
+    #assert args.pred_distill or args.intermediate_distill, "'pred_distill' and 'intermediate_distill', at least one must be True"
     
     tb_dir = os.path.join(args.output_dir, "Tensorboard", args.task_name)
     if not os.path.exists(tb_dir):
@@ -182,7 +183,8 @@ def main():
     if args.student_model is None:
         args.student_model = os.path.join(args.model_dir,task_name.upper())
     if args.teacher_model is None:
-        args.teacher_model = os.path.join(args.model_dir,task_name.upper())
+        #args.teacher_model = os.path.join(args.model_dir,task_name.upper())
+        args.teacher_model = os.path.join(args.model_dir,"BERT_base")
 
     processors = {
         "cola": ColaProcessor,
@@ -211,11 +213,11 @@ def main():
         "cola": {"max_seq_length": 64,"batch_size":16,"eval_step":50},
         "mnli": {"max_seq_length": 128,"batch_size":32,"eval_step":1000},
         "mrpc": {"max_seq_length": 128,"batch_size":32,"eval_step":200},
-        "sst-2": {"max_seq_length": 64,"batch_size":32,"eval_step":200},
+        "sst-2": {"max_seq_length": 64,"batch_size":32,"eval_step":200}, #64
         "sts-b": {"max_seq_length": 128,"batch_size":32,"eval_step":50},
         "qqp": {"max_seq_length": 128,"batch_size":32,"eval_step":1000},
         "qnli": {"max_seq_length": 128,"batch_size":32,"eval_step":1000},
-        "rte": {"max_seq_length": 128,"batch_size":32,"eval_step":100}
+        "rte": {"max_seq_length": 128,"batch_size":16,"eval_step":100}
     }
 
     acc_tasks = ["mnli", "mrpc", "sst-2", "qqp", "qnli", "rte"]
@@ -246,8 +248,9 @@ def main():
     label_list = processor.get_labels()
     num_labels = len(label_list)
 
-    tokenizer = BertTokenizer.from_pretrained(args.student_model, do_lower_case=True)
+    tokenizer = BertTokenizer.from_pretrained(args.teacher_model, do_lower_case=True)
 
+    # Training & Eval Dataset
     if args.aug_train:
         try:
             train_file = os.path.join(processed_data_dir,'aug_data')
@@ -305,7 +308,7 @@ def main():
         mm_eval_dataloader = DataLoader(mm_eval_data, sampler=mm_eval_sampler,
                                         batch_size=args.batch_size)
 
-    
+    # Build Teacher Model
     teacher_model = BertForSequenceClassification.from_pretrained(args.teacher_model)
     
     teacher_model.to(device)
@@ -332,17 +335,18 @@ def main():
         fp32_performance += f"  mm-acc:{result['acc']}"
     fp32_performance = task_name +' fp32   ' + fp32_performance
     
-    student_config = BertConfig.from_pretrained(args.teacher_model, 
-                                                quantize_act=True,
-                                                weight_bits = args.weight_bits,
-                                                input_bits = args.input_bits,
-                                                clip_val = args.clip_val)
+    # student_config = BertConfig.from_pretrained(args.teacher_model, 
+    #                                             quantize_act=True,
+    #                                             weight_bits = args.weight_bits,
+    #                                             input_bits = args.input_bits,
+    #                                             clip_val = args.clip_val)
 
+    # Build Student Model
+    #student_model = QuaertForSequenceClassification.from_pretrained(args.student_model, config = student_config, num_labels=num_labels)
     
-    student_model = QuantBertForSequenceClassification.from_pretrained(args.student_model, config = student_config, num_labels=num_labels)
-    
-    student_model.to(device)
+    #student_model.to(device)
 
+    # Trainig Start
     logger.info("***** Running training *****")
     logger.info("  Num examples = %d", len(train_features))
     logger.info("  Batch size = %d", args.batch_size)
@@ -351,12 +355,14 @@ def main():
         student_model = torch.nn.DataParallel(student_model)
         
     # Prepare optimizer
-    param_optimizer = list(student_model.named_parameters())
+    param_optimizer = list(teacher_model.named_parameters())
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
     optimizer_grouped_parameters = [
         {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
         {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
+    
+    # Optimizer Set
     schedule = 'warmup_linear'
     optimizer = BertAdam(optimizer_grouped_parameters,
                             schedule=schedule,
@@ -377,18 +383,22 @@ def main():
         nb_tr_examples, nb_tr_steps = 0, 0
 
         for step, batch in enumerate(train_dataloader):
-            student_model.train()
+            teacher_model.train()
             batch = tuple(t.to(device) for t in batch)
+            
             input_ids, input_mask, segment_ids, label_ids, seq_lengths = batch
+
             att_loss = 0.
             rep_loss = 0.
             cls_loss = 0.
             loss = 0.
 
-            student_logits, student_atts, student_reps = student_model(input_ids, segment_ids, input_mask)
+            #student_logits, student_atts, student_reps = student_model(input_ids, segment_ids, input_mask)
 
-            with torch.no_grad():
-                teacher_logits, teacher_atts, teacher_reps = teacher_model(input_ids, segment_ids, input_mask)
+            teacher_logits, teacher_atts, teacher_reps = teacher_model(input_ids, segment_ids, input_mask)
+
+            lprobs = torch.nn.functional.log_softmax(teacher_logits, dim=-1)
+            loss = torch.nn.functional.nll_loss(lprobs, label_ids, reduction='sum')
             
             if args.pred_distill:
                 if output_mode == "classification":
@@ -434,20 +444,21 @@ def main():
                 if previous_best is not None:
                     logger.info(f"{fp32_performance}\nPrevious best = {previous_best}")
 
-                student_model.eval()
+                teacher_model.eval()
 
                 loss = tr_loss / (step + 1)
                 cls_loss = tr_cls_loss / (step + 1)
                 att_loss = tr_att_loss / (step + 1)
                 rep_loss = tr_rep_loss / (step + 1)
-
-                result = do_eval(student_model, task_name, eval_dataloader,
+                
+                result = do_eval(teacher_model, task_name, eval_dataloader,
                                     device, output_mode, eval_labels, num_labels)
                 result['global_step'] = global_step
                 result['cls_loss'] = cls_loss
                 result['att_loss'] = att_loss
                 result['rep_loss'] = rep_loss
                 result['loss'] = loss
+                #summaryWriter.add_scalar('lr', optimizer.get_lr()[0], global_step)
                 summaryWriter.add_scalar('total_loss',loss,global_step)
                 summaryWriter.add_scalars('distill_loss',{'att_loss':att_loss,
                                             'rep_loss':rep_loss,
@@ -487,14 +498,14 @@ def main():
                 if save_model:
                     # Test mnli-mm
                     if task_name == "mnli":
-                        result = do_eval(student_model, 'mnli-mm', mm_eval_dataloader,
+                        result = do_eval(teacher_model, 'mnli-mm', mm_eval_dataloader,
                                             device, output_mode, mm_eval_labels, num_labels)
                         previous_best+= f"mm-acc:{result['acc']}"
                     logger.info(fp32_performance)
                     logger.info(previous_best)
                     if args.save_fp_model:
                         logger.info("***** Save full precision model *****")
-                        model_to_save = student_model.module if hasattr(student_model, 'module') else student_model
+                        model_to_save = teacher_model.module if hasattr(teacher_model, 'module') else teacher_model
                         output_model_file = os.path.join(output_dir, WEIGHTS_NAME)
                         output_config_file = os.path.join(output_dir, CONFIG_NAME)
 
