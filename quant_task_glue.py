@@ -172,7 +172,9 @@ def main():
     logger.info('The args: {}'.format(args))
     task_name = args.task_name.lower()
     data_dir = os.path.join(args.data_dir,task_name.upper())
-    output_dir = os.path.join(args.output_dir,task_name)
+    output_dir = os.path.join(args.output_dir,"BERT_base")
+    output_dir = os.path.join(output_dir,task_name.upper())
+
     processed_data_dir = os.path.join(data_dir,'preprocessed')
     if not os.path.exists(processed_data_dir):
         os.mkdir(processed_data_dir)
