@@ -203,3 +203,30 @@ class QuantizeEmbedding(nn.Embedding):
             input, weight, self.padding_idx, self.max_norm,
             self.norm_type, self.scale_grad_by_freq, self.sparse)
         return out
+
+
+class ClipLinear(nn.Linear):
+
+    def __init__(self,  *kargs,bias=True, config = None):
+        super(ClipLinear, self).__init__(*kargs,bias=True)
+
+    def forward(self, input):
+        
+        # Clippinng weight
+
+        weight = self.weight
+        
+        #m = weight.norm(p=1).div(weight.nelement())
+        m_p = weight.max()
+        m_n = weight.min()
+         #thres = torch.Tensor([2.5]).to(weight)
+        
+        weight = torch.where(weight < m_p, weight, m_p)
+        weight = torch.where(weight > m_n, weight, m_n)
+        
+        out = nn.functional.linear(input, weight)
+        
+        if not self.bias is None:
+            out += self.bias.view(1, -1).expand_as(out)
+
+        return out

@@ -25,7 +25,7 @@ import torch
 from torch import nn
 from torch.autograd import Variable
 from .configuration import BertConfig
-from .utils_quant import QuantizeLinear, QuantizeEmbedding, SymQuantizer
+from .utils_quant import QuantizeLinear, QuantizeEmbedding, SymQuantizer, ClipLinear
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,10 @@ class BertIntermediate(nn.Module):
         super(BertIntermediate, self).__init__()
         self.dense = nn.Linear(config.hidden_size, config.intermediate_size)
 
+        #self.dense = ClipLinear(config.hidden_size, config.intermediate_size, config=config)
+
     def forward(self, hidden_states):
+        #hidden_states = self.dense(hidden_states)
         hidden_states = self.dense(hidden_states)
         hidden_states = gelu(hidden_states)
         return hidden_states
@@ -155,8 +158,11 @@ class BertOutput(nn.Module):
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        
+        #elf.dense = ClipLinear(config.intermediate_size, config.hidden_size, config=config)
 
     def forward(self, hidden_states, input_tensor):
+        #hidden_states = self.dense(hidden_states)
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         hidden_states = self.LayerNorm(hidden_states + input_tensor)

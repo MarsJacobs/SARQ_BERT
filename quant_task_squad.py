@@ -170,7 +170,7 @@ def main():
     logger.info(f'The args: {args}')
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
-
+    import pdb; pdb.set_trace()
     tokenizer = BertTokenizer.from_pretrained(args.teacher_model, do_lower_case=True)
 
     # preparing training data

@@ -23,6 +23,7 @@ from transformer import BertAdam
 from transformer import BertConfig
 from utils_glue import *
 
+from tqdm import tqdm
 log_format = '%(asctime)s %(message)s'
 logging.basicConfig(stream=sys.stdout, level=logging.INFO,
                     format=log_format, datefmt='%m/%d %I:%M:%S %p')
@@ -48,12 +49,12 @@ def do_eval(model, task_name, eval_dataloader,
     nb_eval_steps = 0
     preds = []
 
-    for _,batch_ in enumerate(eval_dataloader):
+    for batch_ in tqdm(eval_dataloader, desc="Inference", mininterval=0.01, ascii=True, leave=False):
         batch_ = tuple(t.to(device) for t in batch_)
         with torch.no_grad():
             input_ids, input_mask, segment_ids, label_ids, seq_lengths = batch_
             logits, _, _ = model(input_ids, segment_ids, input_mask)
-
+        
         # create eval loss and other metric required by the task
         if output_mode == "classification":
             loss_fct = CrossEntropyLoss()
@@ -172,8 +173,10 @@ def main():
     logger.info('The args: {}'.format(args))
     task_name = args.task_name.lower()
     data_dir = os.path.join(args.data_dir,task_name.upper())
-    output_dir = os.path.join(args.output_dir,"BERT_base")
+    output_dir = os.path.join(args.output_dir,"BERT_large")
     output_dir = os.path.join(output_dir,task_name.upper())
+    if not os.path.exists(output_dir):
+        os.mkdir(output_dir)
 
     processed_data_dir = os.path.join(data_dir,'preprocessed')
     if not os.path.exists(processed_data_dir):
@@ -186,7 +189,8 @@ def main():
         args.student_model = os.path.join(args.model_dir,task_name.upper())
     if args.teacher_model is None:
         #args.teacher_model = os.path.join(args.model_dir,task_name.upper())
-        args.teacher_model = os.path.join(args.model_dir,"BERT_base")
+        # args.teacher_model = os.path.join(args.model_dir,"BERT_base")
+        args.teacher_model = os.path.join(args.model_dir,"bert-large-uncased")
 
     processors = {
         "cola": ColaProcessor,
@@ -212,14 +216,14 @@ def main():
     }
 
     default_params = {
-        "cola": {"max_seq_length": 64,"batch_size":16,"eval_step":50},
+        "cola": {"max_seq_length": 64,"batch_size":16,"eval_step":200}, #50
         "mnli": {"max_seq_length": 128,"batch_size":32,"eval_step":1000},
         "mrpc": {"max_seq_length": 128,"batch_size":32,"eval_step":200},
         "sst-2": {"max_seq_length": 64,"batch_size":32,"eval_step":200}, #64
         "sts-b": {"max_seq_length": 128,"batch_size":32,"eval_step":50},
         "qqp": {"max_seq_length": 128,"batch_size":32,"eval_step":1000},
         "qnli": {"max_seq_length": 128,"batch_size":32,"eval_step":1000},
-        "rte": {"max_seq_length": 128,"batch_size":16,"eval_step":100}
+        "rte": {"max_seq_length": 128,"batch_size":16,"eval_step":5000} # 100
     }
 
     acc_tasks = ["mnli", "mrpc", "sst-2", "qqp", "qnli", "rte"]
@@ -261,6 +265,8 @@ def main():
             train_examples = processor.get_aug_examples(data_dir)
             train_features = convert_examples_to_features(train_examples, label_list,
                                             args.max_seq_length, tokenizer, output_mode)
+            with open(train_file, 'wb') as f:
+                pickle.dump(train_features, f, protocol=pickle.HIGHEST_PROTOCOL)
     else:
         try:
             train_file = os.path.join(processed_data_dir,'data.pkl')
@@ -311,10 +317,13 @@ def main():
                                         batch_size=args.batch_size)
 
     # Build Teacher Model
-    teacher_model = BertForSequenceClassification.from_pretrained(args.teacher_model)
+    
+    teacher_model = BertForSequenceClassification.from_pretrained(args.teacher_model, num_labels=num_labels)
+    
     
     teacher_model.to(device)
     teacher_model.eval()
+    
     if n_gpu > 1:
         teacher_model = torch.nn.DataParallel(teacher_model, device_ids=range(n_gpu))
     
@@ -384,7 +393,7 @@ def main():
         logger.info("****************************** %d Epoch ******************************", epoch_)
         nb_tr_examples, nb_tr_steps = 0, 0
 
-        for step, batch in enumerate(train_dataloader):
+        for step, batch in enumerate(tqdm(train_dataloader,desc=f"Epoch_{epoch_}", mininterval=0.01, ascii=True)):
             teacher_model.train()
             batch = tuple(t.to(device) for t in batch)
             
@@ -399,8 +408,11 @@ def main():
 
             teacher_logits, teacher_atts, teacher_reps = teacher_model(input_ids, segment_ids, input_mask)
 
-            lprobs = torch.nn.functional.log_softmax(teacher_logits, dim=-1)
-            loss = torch.nn.functional.nll_loss(lprobs, label_ids, reduction='sum')
+            if output_mode == "classification":
+                lprobs = torch.nn.functional.log_softmax(teacher_logits, dim=-1)
+                loss = torch.nn.functional.nll_loss(lprobs, label_ids, reduction='sum')
+            elif output_mode == "regression":
+                loss = loss_mse(teacher_logits.reshape(-1), label_ids)
             
             if args.pred_distill:
                 if output_mode == "classification":
@@ -460,7 +472,7 @@ def main():
                 result['att_loss'] = att_loss
                 result['rep_loss'] = rep_loss
                 result['loss'] = loss
-                #summaryWriter.add_scalar('lr', optimizer.get_lr()[0], global_step)
+                summaryWriter.add_scalar('lr', optimizer.get_lr()[0], global_step)
                 summaryWriter.add_scalar('total_loss',loss,global_step)
                 summaryWriter.add_scalars('distill_loss',{'att_loss':att_loss,
                                             'rep_loss':rep_loss,
@@ -468,8 +480,10 @@ def main():
 
                 if task_name=='cola':
                     summaryWriter.add_scalar('mcc',result['mcc'],global_step)
+                    logger.info(f"Eval Result is {result['mcc']}")
                 elif task_name in ['sst-2','mnli','mnli-mm','qnli','rte','wnli']:
                     summaryWriter.add_scalar('acc',result['acc'],global_step)
+                    logger.info(f"Eval Result is {result['acc']}")
                 elif task_name in ['mrpc','qqp']:
                     summaryWriter.add_scalars('performance',{'acc':result['acc'],
                                                 'f1':result['f1'],
